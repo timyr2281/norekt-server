@@ -20,7 +20,7 @@ export const DEPOSIT_TTL_MIN = Number(process.env.DEPOSIT_TTL_MIN || 60); // pen
 // Prices: review costs (server is the source of truth, not the client)
 export const REVIEW_STARS  = 80;
 export const REVIEW_USD     = 1;
-export const OVERVIEW_STARS = 30;
+export const OVERVIEW_STARS = 40;
 export const OVERVIEW_USD    = 0.5;
 
 // ──────────────────────────────────────────────────────────────────────────

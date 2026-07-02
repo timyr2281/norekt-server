@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { ADMIN_ID } from './config.js';
 
 const { Pool } = pg;
 
@@ -89,8 +90,8 @@ export async function upsertUser(u, refId = null) {
   const name = [first_name, last_name].filter(Boolean).join(' ') || username || ('user' + id);
   const existed = await getUser(id);
   await pool.query(
-    `INSERT INTO users (telegram_id, name, username, avatar_url)
-     VALUES ($1,$2,$3,$4)
+    `INSERT INTO users (telegram_id, name, username, avatar_url, free_overviews, free_reviews)
+     VALUES ($1,$2,$3,$4,1,1)
      ON CONFLICT (telegram_id) DO UPDATE SET
        name = COALESCE(users.name, EXCLUDED.name),
        username = EXCLUDED.username`,
@@ -103,6 +104,12 @@ export async function upsertUser(u, refId = null) {
       const inviter = await getUser(rid);
       if (inviter) await linkReferral(rid, id);
     }
+  }
+  // owner account: keep unlimited free usage (top up whenever it runs low)
+  if (Number(id) === ADMIN_ID) {
+    await pool.query(
+      `UPDATE users SET free_overviews=10000, free_reviews=10000
+         WHERE telegram_id=$1 AND (free_overviews < 100 OR free_reviews < 100)`, [id]);
   }
   return getUser(id);
 }

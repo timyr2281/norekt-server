@@ -2,7 +2,7 @@ import express from 'express';
 import { PORT, WEBAPP_URL, BOT_TOKEN } from './config.js';
 import { initDb } from './db.js';
 import { api, setBotUsername } from './api.js';
-import { bot, botWebhook, getBotUsername } from './bot.js';
+import { bot, botWebhook, getBotUsername, setMenuButton } from './bot.js';
 import { startChainWatcher } from './chain.js';
 
 const app = express();
@@ -39,6 +39,7 @@ async function main() {
 
   const uname = await getBotUsername();
   if (uname) { setBotUsername(uname); console.log('[bot] username @' + uname); }
+  await setMenuButton();
 
   app.listen(PORT, () => console.log(`[api] listening on ${PORT}`));
 }

@@ -5,17 +5,11 @@ import { upsertUser, rewardOnFirstPayment } from './db.js';
 
 export const bot = new Telegraf(BOT_TOKEN);
 
-// /start [refId] -> create/link user, then show the mini app button.
-// Referral: "https://t.me/<bot>?start=<inviterId>" arrives as ctx.startPayload.
+// /start [refId] -> silently create/link the user. No message is sent.
+// Users open the mini app via the persistent menu button (set at boot).
 bot.start(async (ctx) => {
   const ref = ctx.startPayload || null;   // inviter's telegram id, if any
   await upsertUser(ctx.from, ref);
-  await ctx.reply(
-    'NoRekt — a sober read on your position. Tap below to open.',
-    WEBAPP_URL
-      ? { reply_markup: { inline_keyboard: [[{ text: 'Open NoRekt', web_app: { url: WEBAPP_URL } }]] } }
-      : undefined
-  );
 });
 
 // ── Stars invoice creation (called by the API/mini app) ──
@@ -55,6 +49,17 @@ bot.on('message', async (ctx, next) => {
 export async function getBotUsername() {
   try { const me = await bot.telegram.getMe(); return me.username; }
   catch { return null; }
+}
+
+// set the persistent menu button (next to the message input) to open the mini app
+export async function setMenuButton() {
+  if (!WEBAPP_URL) return;
+  try {
+    await bot.telegram.setChatMenuButton({
+      menu_button: { type: 'web_app', text: 'Open NoRekt', web_app: { url: WEBAPP_URL } }
+    });
+    console.log('[bot] menu button set');
+  } catch (e) { console.error('[bot] setMenuButton failed:', e.message); }
 }
 
 // throttled broadcast to a list of chat ids (~20/sec to stay under Telegram limits)
