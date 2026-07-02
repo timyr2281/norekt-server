@@ -3,14 +3,15 @@ import { verifyInitData } from './initdata.js';
 import {
   upsertUser, getUser, setProfile, chargeUsd,
   useFreeOverview, useFreeReview, referralStats,
-  saveAnalysis, listAnalyses, adminStats
+  saveAnalysis, listAnalyses, adminStats,
+  adminUsers, setBlocked, isBlocked, allUserIds
 } from './db.js';
 import { pool } from './db.js';
 import {
   NETWORKS, COIN_NETWORKS, DEPOSIT_TTL_MIN,
   REVIEW_USD, OVERVIEW_USD, ADMIN_ID, ADMIN_PASSWORD
 } from './config.js';
-import { createStarsInvoice } from './bot.js';
+import { createStarsInvoice, broadcast } from './bot.js';
 
 export const api = express.Router();
 api.use(express.json());
@@ -27,7 +28,13 @@ async function auth(req, res, next) {
   // referral id may arrive from the WebApp start_param
   const refId = req.body?.ref || null;
   req.dbUser = await upsertUser(user, refId);
+  // blocked users can't use the bot (admin is exempt)
+  if (Number(user.id) !== ADMIN_ID && req.dbUser && req.dbUser.blocked)
+    return res.status(403).json({ error: 'blocked' });
   next();
+}
+function isAdmin(req) {
+  return Number(req.tgUser.id) === ADMIN_ID && ADMIN_PASSWORD && req.body?.password === ADMIN_PASSWORD;
 }
 
 // current profile + balances + free counters + referral link
@@ -149,13 +156,33 @@ api.post('/stars/invoice', auth, async (req, res) => {
 
 // ── ADMIN (read-only). Requires BOTH the verified Telegram ID AND the password. ──
 api.post('/admin/check', auth, (req, res) => {
-  const ok = Number(req.tgUser.id) === ADMIN_ID && ADMIN_PASSWORD && req.body?.password === ADMIN_PASSWORD;
-  res.json({ ok: !!ok });
+  res.json({ ok: isAdmin(req) });
 });
 api.post('/admin/stats', auth, async (req, res) => {
-  const ok = Number(req.tgUser.id) === ADMIN_ID && ADMIN_PASSWORD && req.body?.password === ADMIN_PASSWORD;
-  if (!ok) return res.status(403).json({ error: 'forbidden' });
+  if (!isAdmin(req)) return res.status(403).json({ error: 'forbidden' });
   res.json(await adminStats());
+});
+// full user list with metrics (client does search + sort)
+api.post('/admin/users', auth, async (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'forbidden' });
+  res.json({ users: await adminUsers() });
+});
+// block / unblock a user
+api.post('/admin/block', auth, async (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'forbidden' });
+  const { target, blocked } = req.body || {};
+  if (Number(target) === ADMIN_ID) return res.status(400).json({ error: 'cant_block_admin' });
+  await setBlocked(Number(target), !!blocked);
+  res.json({ ok: true });
+});
+// broadcast a message to every (non-blocked) user, throttled
+api.post('/admin/broadcast', auth, async (req, res) => {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'forbidden' });
+  const text = (req.body?.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'empty' });
+  const ids = await allUserIds();
+  res.json({ ok: true, queued: ids.length });   // respond immediately
+  broadcast(ids, text);                          // run in background (throttled)
 });
 // tell the client whether this user is the admin (to show/hide the button)
 api.post('/admin/is', auth, (req, res) => {

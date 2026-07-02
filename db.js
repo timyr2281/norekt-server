@@ -79,6 +79,7 @@ export async function initDb() {
     ALTER TABLE users ADD COLUMN IF NOT EXISTS free_reviews   INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by    BIGINT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS has_paid       BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked        BOOLEAN NOT NULL DEFAULT FALSE;
   `);
   console.log('[db] schema ready');
 }
@@ -183,6 +184,46 @@ export async function listAnalyses(id, limit = 30) {
     `SELECT id, kind, coin, level, payload, created_at FROM analyses
        WHERE telegram_id=$1 ORDER BY created_at DESC LIMIT $2`, [id, limit]);
   return rows;
+}
+
+// full user list with per-user metrics (for admin ratings + search)
+export async function adminUsers() {
+  const { rows } = await pool.query(`
+    SELECT u.telegram_id, u.name, u.username, u.has_paid, u.blocked,
+           u.free_overviews, u.free_reviews, u.created_at,
+           COALESCE(p.purchases,0)::int AS purchases,
+           COALESCE(p.usd,0) AS usd,
+           COALESCE(r.invited,0)::int AS invited,
+           COALESCE(r.invited_paid,0)::int AS invited_paid,
+           COALESCE(a.analyses,0)::int AS analyses
+    FROM users u
+    LEFT JOIN (
+      SELECT telegram_id, count(*) AS purchases,
+             SUM(amount) FILTER (WHERE method='usd') AS usd
+      FROM charges WHERE method IN ('usd','stars') GROUP BY telegram_id
+    ) p ON p.telegram_id=u.telegram_id
+    LEFT JOIN (
+      SELECT inviter_id, count(*) AS invited,
+             count(*) FILTER (WHERE paid_rewarded) AS invited_paid
+      FROM referrals GROUP BY inviter_id
+    ) r ON r.inviter_id=u.telegram_id
+    LEFT JOIN (
+      SELECT telegram_id, count(*) AS analyses FROM analyses GROUP BY telegram_id
+    ) a ON a.telegram_id=u.telegram_id
+    ORDER BY u.created_at DESC
+  `);
+  return rows;
+}
+export async function setBlocked(id, blocked) {
+  await pool.query('UPDATE users SET blocked=$2 WHERE telegram_id=$1', [id, !!blocked]);
+}
+export async function isBlocked(id) {
+  const { rows } = await pool.query('SELECT blocked FROM users WHERE telegram_id=$1', [id]);
+  return !!(rows[0] && rows[0].blocked);
+}
+export async function allUserIds() {
+  const { rows } = await pool.query('SELECT telegram_id FROM users WHERE NOT blocked');
+  return rows.map(r => r.telegram_id);
 }
 
 // ── admin analytics (read-only) ──

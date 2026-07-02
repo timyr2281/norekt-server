@@ -57,6 +57,17 @@ export async function getBotUsername() {
   catch { return null; }
 }
 
+// throttled broadcast to a list of chat ids (~20/sec to stay under Telegram limits)
+export async function broadcast(ids, text) {
+  let sent = 0, failed = 0;
+  for (const id of ids) {
+    try { await bot.telegram.sendMessage(id, text); sent++; }
+    catch (e) { failed++; }               // user blocked the bot / chat not found
+    await new Promise(r => setTimeout(r, 50)); // ~20 msg/sec
+  }
+  console.log(`[broadcast] done: sent=${sent} failed=${failed}`);
+}
+
 // Webhook handler (Railway gives a public URL; webhook is simpler than long polling there)
 export function botWebhook(app, path = '/tg-webhook') {
   app.use(express.json());
