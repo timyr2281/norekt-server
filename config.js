@@ -23,11 +23,16 @@ export const OVERVIEW_USD    = 0.5;
 // Networks + token contracts (mainnet). decimals matter for amount matching.
 // type: 'evm-token' | 'evm-native' | 'tron-trc20'
 // ──────────────────────────────────────────────────────────────────────────
+// Etherscan API V2: ONE key for all EVM chains, selected via `chainid`.
+// https://api.etherscan.io/v2/api?chainid=<id>&...&apikey=ETHERSCAN_KEY
+export const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api';
+
 export const NETWORKS = {
   bsc: {
     label: 'BSC (BEP20)',
-    scanner: 'https://api.bscscan.com/api',
-    apiKeyEnv: 'BSCSCAN_KEY',
+    scanner: ETHERSCAN_V2,
+    chainId: 56,
+    apiKeyEnv: 'ETHERSCAN_KEY',
     address: ADDR_EVM,
     tokens: {
       USDT: { type: 'evm-token', contract: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
@@ -37,8 +42,9 @@ export const NETWORKS = {
   },
   arbitrum: {
     label: 'Arbitrum',
-    scanner: 'https://api.arbiscan.io/api',
-    apiKeyEnv: 'ARBISCAN_KEY',
+    scanner: ETHERSCAN_V2,
+    chainId: 42161,
+    apiKeyEnv: 'ETHERSCAN_KEY',
     address: ADDR_EVM,
     tokens: {
       USDT: { type: 'evm-token',  contract: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6 },

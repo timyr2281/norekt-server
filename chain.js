@@ -39,7 +39,7 @@ async function fetchIncoming(net, coin) {
     }
 
     if (t.type === 'evm-native') {
-      const url = `${cfg.scanner}?module=account&action=txlist&address=${addr}&page=1&offset=50&sort=desc&apikey=${apiKey(net)}`;
+      const url = `${cfg.scanner}?chainid=${cfg.chainId}&module=account&action=txlist&address=${addr}&page=1&offset=50&sort=desc&apikey=${apiKey(net)}`;
       const r = await fetch(url);
       const j = await r.json();
       if (!Array.isArray(j.result)) return [];
@@ -49,7 +49,7 @@ async function fetchIncoming(net, coin) {
     }
 
     // evm-token (BEP20 / ERC20)
-    const url = `${cfg.scanner}?module=account&action=tokentx&contractaddress=${t.contract}&address=${addr}&page=1&offset=50&sort=desc&apikey=${apiKey(net)}`;
+    const url = `${cfg.scanner}?chainid=${cfg.chainId}&module=account&action=tokentx&contractaddress=${t.contract}&address=${addr}&page=1&offset=50&sort=desc&apikey=${apiKey(net)}`;
     const r = await fetch(url);
     const j = await r.json();
     if (!Array.isArray(j.result)) return [];
