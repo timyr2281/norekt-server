@@ -11,7 +11,7 @@
 
 ## Что нужно добыть самому
 1. **BOT_TOKEN** — у @BotFather.
-2. Ключи сканеров (бесплатно): **BscScan** (bscscan.com/myapikey), **Arbiscan** (arbiscan.io/myapikey). **TronGrid** ключ опционально (trongrid.io).
+2. **ETHERSCAN_KEY** — один ключ Etherscan API V2 покрывает BSC + Arbitrum + все EVM-сети. Регистрируешься на etherscan.io → создаёшь один API-ключ. **TronGrid** ключ опционально (trongrid.io).
 3. Аккаунт **Railway**.
 
 ## Деплой на Railway
