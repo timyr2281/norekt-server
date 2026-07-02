@@ -9,6 +9,10 @@ export const ADDR_TRON = (process.env.TRON_ADDRESS || 'TZELSNUrT1vkQJcWYW8vKj8r5
 
 export const BOT_TOKEN   = process.env.BOT_TOKEN;          // from @BotFather
 export const WEBAPP_URL  = process.env.WEBAPP_URL || '';   // https URL where the mini app html is hosted
+
+// Admin panel: access requires BOTH the verified Telegram ID and the password (env only).
+export const ADMIN_ID = Number(process.env.ADMIN_ID || 1437839289);
+export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ''; // set this in Railway, never in code
 export const PORT        = process.env.PORT || 3000;
 export const POLL_MS     = Number(process.env.POLL_MS || 30000);   // how often to scan the chains
 export const DEPOSIT_TTL_MIN = Number(process.env.DEPOSIT_TTL_MIN || 60); // pending deposit lifetime

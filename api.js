@@ -3,12 +3,12 @@ import { verifyInitData } from './initdata.js';
 import {
   upsertUser, getUser, setProfile, chargeUsd,
   useFreeOverview, useFreeReview, referralStats,
-  saveAnalysis, listAnalyses
+  saveAnalysis, listAnalyses, adminStats
 } from './db.js';
 import { pool } from './db.js';
 import {
   NETWORKS, COIN_NETWORKS, DEPOSIT_TTL_MIN,
-  REVIEW_USD, OVERVIEW_USD
+  REVIEW_USD, OVERVIEW_USD, ADMIN_ID, ADMIN_PASSWORD
 } from './config.js';
 import { createStarsInvoice } from './bot.js';
 
@@ -145,6 +145,21 @@ api.post('/stars/invoice', auth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: 'invoice_failed', detail: e.message });
   }
+});
+
+// ── ADMIN (read-only). Requires BOTH the verified Telegram ID AND the password. ──
+api.post('/admin/check', auth, (req, res) => {
+  const ok = Number(req.tgUser.id) === ADMIN_ID && ADMIN_PASSWORD && req.body?.password === ADMIN_PASSWORD;
+  res.json({ ok: !!ok });
+});
+api.post('/admin/stats', auth, async (req, res) => {
+  const ok = Number(req.tgUser.id) === ADMIN_ID && ADMIN_PASSWORD && req.body?.password === ADMIN_PASSWORD;
+  if (!ok) return res.status(403).json({ error: 'forbidden' });
+  res.json(await adminStats());
+});
+// tell the client whether this user is the admin (to show/hide the button)
+api.post('/admin/is', auth, (req, res) => {
+  res.json({ admin: Number(req.tgUser.id) === ADMIN_ID });
 });
 
 function pub(u) {

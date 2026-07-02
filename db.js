@@ -185,6 +185,44 @@ export async function listAnalyses(id, limit = 30) {
   return rows;
 }
 
+// ── admin analytics (read-only) ──
+export async function adminStats() {
+  const totals = await pool.query(`
+    SELECT
+      (SELECT count(*)::int FROM users) AS users,
+      (SELECT count(*)::int FROM users WHERE has_paid) AS buyers,
+      (SELECT count(*)::int FROM referrals) AS referrals,
+      (SELECT count(*)::int FROM charges WHERE method IN ('usd','stars')) AS purchases,
+      (SELECT COALESCE(sum(amount),0) FROM charges WHERE method='usd') AS usd_spent,
+      (SELECT COALESCE(sum(amount),0) FROM charges WHERE method='stars') AS stars_spent,
+      (SELECT count(*)::int FROM analyses) AS analyses
+  `);
+  const topBuyers = await pool.query(`
+    SELECT u.telegram_id, u.name, u.username,
+           count(*)::int AS purchases,
+           COALESCE(sum(c.amount) FILTER (WHERE c.method='usd'),0) AS usd
+    FROM charges c JOIN users u ON u.telegram_id=c.telegram_id
+    WHERE c.method IN ('usd','stars')
+    GROUP BY u.telegram_id, u.name, u.username
+    ORDER BY purchases DESC LIMIT 20`);
+  const topRef = await pool.query(`
+    SELECT u.telegram_id, u.name, u.username,
+           count(r.*)::int AS invited,
+           count(r.*) FILTER (WHERE r.paid_rewarded)::int AS invited_paid
+    FROM referrals r JOIN users u ON u.telegram_id=r.inviter_id
+    GROUP BY u.telegram_id, u.name, u.username
+    ORDER BY invited DESC LIMIT 20`);
+  const recent = await pool.query(`
+    SELECT telegram_id, name, username, has_paid, free_overviews, free_reviews, created_at
+    FROM users ORDER BY created_at DESC LIMIT 50`);
+  return {
+    totals: totals.rows[0],
+    topBuyers: topBuyers.rows,
+    topReferrers: topRef.rows,
+    recentUsers: recent.rows
+  };
+}
+
 export async function getUser(id) {
   const { rows } = await pool.query('SELECT * FROM users WHERE telegram_id=$1', [id]);
   return rows[0] || null;
