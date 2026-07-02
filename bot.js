@@ -1,26 +1,28 @@
 import { Telegraf } from 'telegraf';
 import express from 'express';
 import { BOT_TOKEN, WEBAPP_URL, REVIEW_STARS, OVERVIEW_STARS } from './config.js';
-import { upsertUser, addStars } from './db.js';
+import { upsertUser, rewardOnFirstPayment } from './db.js';
 
 export const bot = new Telegraf(BOT_TOKEN);
 
-// /start -> button that opens the mini app
+// /start [refId] -> create/link user, then show the mini app button.
+// Referral: "https://t.me/<bot>?start=<inviterId>" arrives as ctx.startPayload.
 bot.start(async (ctx) => {
-  await upsertUser(ctx.from);
+  const ref = ctx.startPayload || null;   // inviter's telegram id, if any
+  await upsertUser(ctx.from, ref);
   await ctx.reply(
-    'RiskCheck — трезвая оценка риска твоей позиции.',
+    'NoRekt — трезвая оценка риска твоей позиции.',
     WEBAPP_URL
-      ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть RiskCheck', web_app: { url: WEBAPP_URL } }]] } }
+      ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть NoRekt', web_app: { url: WEBAPP_URL } }]] } }
       : undefined
   );
 });
 
 // ── Stars invoice creation (called by the API/mini app) ──
-// kind: 'review' | 'overview' ; returns an invoice link the WebApp opens via openInvoice()
+// kind: 'review' | 'overview'
 export async function createStarsInvoice(kind, telegramId) {
   const stars = kind === 'overview' ? OVERVIEW_STARS : REVIEW_STARS;
-  const title = kind === 'overview' ? 'RiskCheck — обзор монеты' : 'RiskCheck — разбор позиции';
+  const title = kind === 'overview' ? 'NoRekt — обзор монеты' : 'NoRekt — разбор позиции';
   const link = await bot.telegram.createInvoiceLink({
     title,
     description: title,
@@ -35,20 +37,25 @@ export async function createStarsInvoice(kind, telegramId) {
 // must answer pre_checkout within 10s
 bot.on('pre_checkout_query', (ctx) => ctx.answerPreCheckoutQuery(true).catch(() => {}));
 
-// payment succeeded -> credit the user (here we top up their stars balance;
-// the mini app then spends stars for the review/overview, or you can grant the item directly)
+// payment succeeded: Stars are a per-item payment (received into your Stars account).
+// We don't keep a spendable stars balance; we just reward the inviter on the buyer's FIRST payment.
 bot.on('message', async (ctx, next) => {
   const sp = ctx.message?.successful_payment;
   if (!sp) return next();
   try {
     const { telegramId } = JSON.parse(sp.invoice_payload || '{}');
-    const stars = sp.total_amount; // in XTR
-    if (telegramId) await addStars(telegramId, stars);
-    await ctx.reply(`Оплата получена: ${stars} ★ зачислены.`);
+    if (telegramId) await rewardOnFirstPayment(telegramId);
+    await ctx.reply('Оплата получена. Спасибо!');
   } catch (e) {
     console.error('[bot] successful_payment handling failed:', e.message);
   }
 });
+
+// resolve and cache the bot username (used to build referral links)
+export async function getBotUsername() {
+  try { const me = await bot.telegram.getMe(); return me.username; }
+  catch { return null; }
+}
 
 // Webhook handler (Railway gives a public URL; webhook is simpler than long polling there)
 export function botWebhook(app, path = '/tg-webhook') {

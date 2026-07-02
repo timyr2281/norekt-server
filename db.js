@@ -19,6 +19,18 @@ export async function initDb() {
       avatar_url   TEXT,
       stars        INTEGER     NOT NULL DEFAULT 0,
       usd_balance  NUMERIC(18,6) NOT NULL DEFAULT 0,
+      free_overviews INTEGER   NOT NULL DEFAULT 2,   -- new user gets 2 free coin overviews
+      free_reviews   INTEGER   NOT NULL DEFAULT 0,   -- earned via referrals who paid
+      referred_by    BIGINT,                          -- who invited this user (set once)
+      has_paid       BOOLEAN   NOT NULL DEFAULT FALSE, -- did this user ever pay (for referral reward)
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    -- one row per successful referral link (inviter -> invitee), invitee unique
+    CREATE TABLE IF NOT EXISTS referrals (
+      invitee_id   BIGINT PRIMARY KEY REFERENCES users(telegram_id),
+      inviter_id   BIGINT NOT NULL REFERENCES users(telegram_id),
+      paid_rewarded BOOLEAN NOT NULL DEFAULT FALSE,   -- inviter already got the "paid" bonus
       created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
@@ -45,17 +57,24 @@ export async function initDb() {
       id          BIGSERIAL PRIMARY KEY,
       telegram_id BIGINT NOT NULL,
       kind        TEXT   NOT NULL,  -- review | overview
-      method      TEXT   NOT NULL,  -- stars | usd
+      method      TEXT   NOT NULL,  -- stars | usd | free
       amount      NUMERIC(18,6) NOT NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- migrations for a DB created before these columns existed
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_overviews INTEGER NOT NULL DEFAULT 2;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_reviews   INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by    BIGINT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS has_paid       BOOLEAN NOT NULL DEFAULT FALSE;
   `);
   console.log('[db] schema ready');
 }
 
-export async function upsertUser(u) {
+export async function upsertUser(u, refId = null) {
   const { id, first_name, last_name, username, photo_url } = u;
   const name = [first_name, last_name].filter(Boolean).join(' ') || username || ('user' + id);
+  const existed = await getUser(id);
   await pool.query(
     `INSERT INTO users (telegram_id, name, username, avatar_url)
      VALUES ($1,$2,$3,$4)
@@ -64,7 +83,75 @@ export async function upsertUser(u) {
        username = EXCLUDED.username`,
     [id, name, username || null, photo_url || null]
   );
+  // handle referral only for brand-new users with a valid, different inviter
+  if (!existed && refId) {
+    const rid = Number(refId);
+    if (rid && rid !== Number(id)) {
+      const inviter = await getUser(rid);
+      if (inviter) await linkReferral(rid, id);
+    }
+  }
   return getUser(id);
+}
+
+// link invitee to inviter (once); reward inviter with +1 free overview
+async function linkReferral(inviterId, inviteeId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const ins = await client.query(
+      `INSERT INTO referrals (invitee_id, inviter_id) VALUES ($1,$2)
+       ON CONFLICT (invitee_id) DO NOTHING`, [inviteeId, inviterId]);
+    if (ins.rowCount) {
+      await client.query('UPDATE users SET referred_by=$2 WHERE telegram_id=$1 AND referred_by IS NULL', [inviteeId, inviterId]);
+      await client.query('UPDATE users SET free_overviews = free_overviews + 1 WHERE telegram_id=$1', [inviterId]);
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('[db] linkReferral failed:', e.message);
+  } finally { client.release(); }
+}
+
+// consume a free overview if available; returns true if used a free one
+export async function useFreeOverview(id) {
+  const { rowCount } = await pool.query(
+    `UPDATE users SET free_overviews = free_overviews - 1
+       WHERE telegram_id=$1 AND free_overviews > 0`, [id]);
+  if (rowCount) await pool.query('INSERT INTO charges(telegram_id,kind,method,amount) VALUES($1,$2,$3,$4)', [id, 'overview', 'free', 0]);
+  return rowCount > 0;
+}
+// consume a free review if available
+export async function useFreeReview(id) {
+  const { rowCount } = await pool.query(
+    `UPDATE users SET free_reviews = free_reviews - 1
+       WHERE telegram_id=$1 AND free_reviews > 0`, [id]);
+  if (rowCount) await pool.query('INSERT INTO charges(telegram_id,kind,method,amount) VALUES($1,$2,$3,$4)', [id, 'review', 'free', 0]);
+  return rowCount > 0;
+}
+
+// mark that a user has paid; reward their inviter once with +1 free review
+export async function rewardOnFirstPayment(id) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE users SET has_paid=TRUE WHERE telegram_id=$1', [id]);
+    const { rows } = await client.query(
+      `SELECT inviter_id FROM referrals WHERE invitee_id=$1 AND paid_rewarded=FALSE`, [id]);
+    if (rows[0]) {
+      await client.query('UPDATE users SET free_reviews = free_reviews + 1 WHERE telegram_id=$1', [rows[0].inviter_id]);
+      await client.query('UPDATE referrals SET paid_rewarded=TRUE WHERE invitee_id=$1', [id]);
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('[db] rewardOnFirstPayment failed:', e.message);
+  } finally { client.release(); }
+}
+
+export async function referralStats(id) {
+  const { rows } = await pool.query('SELECT count(*)::int AS n FROM referrals WHERE inviter_id=$1', [id]);
+  return { invited: rows[0]?.n || 0 };
 }
 
 export async function getUser(id) {
@@ -97,6 +184,9 @@ export async function chargeStars(id, n, kind) {
 export async function chargeUsd(id, n, kind) {
   const { rowCount } = await pool.query(
     'UPDATE users SET usd_balance = usd_balance - $2 WHERE telegram_id=$1 AND usd_balance >= $2', [id, n]);
-  if (rowCount) await pool.query('INSERT INTO charges(telegram_id,kind,method,amount) VALUES($1,$2,$3,$4)', [id, kind, 'usd', n]);
+  if (rowCount) {
+    await pool.query('INSERT INTO charges(telegram_id,kind,method,amount) VALUES($1,$2,$3,$4)', [id, kind, 'usd', n]);
+    await rewardOnFirstPayment(id);   // first real payment rewards the inviter with a free review
+  }
   return rowCount > 0;
 }

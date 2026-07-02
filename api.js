@@ -1,7 +1,8 @@
 import express from 'express';
 import { verifyInitData } from './initdata.js';
 import {
-  upsertUser, getUser, setProfile, chargeUsd, chargeStars
+  upsertUser, getUser, setProfile, chargeUsd,
+  useFreeOverview, useFreeReview, referralStats
 } from './db.js';
 import { pool } from './db.js';
 import {
@@ -13,19 +14,38 @@ import { createStarsInvoice } from './bot.js';
 export const api = express.Router();
 api.use(express.json());
 
+let BOT_USERNAME = null; // filled once at boot from bot.js
+export function setBotUsername(u) { BOT_USERNAME = u; }
+
 // auth middleware: every call must send Telegram initData; we verify it and trust the user.
 async function auth(req, res, next) {
   const initData = req.headers['x-init-data'] || req.body?.initData;
   const user = verifyInitData(initData);
   if (!user) return res.status(401).json({ error: 'bad_init_data' });
   req.tgUser = user;
-  req.dbUser = await upsertUser(user);
+  // referral id may arrive from the WebApp start_param
+  const refId = req.body?.ref || null;
+  req.dbUser = await upsertUser(user, refId);
   next();
 }
 
-// current profile + balances
+// current profile + balances + free counters + referral link
 api.post('/me', auth, async (req, res) => {
-  res.json(pub(req.dbUser));
+  res.json(await pubFull(req.dbUser));
+});
+
+// try to use a FREE overview (referral / welcome). returns {free:true} if consumed.
+api.post('/overview/free', auth, async (req, res) => {
+  const free = await useFreeOverview(req.tgUser.id);
+  const u = await getUser(req.tgUser.id);
+  res.json({ free, balances: await pubFull(u) });
+});
+
+// try to use a FREE review (earned when an invited user paid)
+api.post('/review/free', auth, async (req, res) => {
+  const free = await useFreeReview(req.tgUser.id);
+  const u = await getUser(req.tgUser.id);
+  res.json({ free, balances: await pubFull(u) });
 });
 
 // edit name / avatar
@@ -92,7 +112,7 @@ api.post('/deposit/status', auth, async (req, res) => {
   );
   if (!rows[0]) return res.status(404).json({ error: 'not_found' });
   const u = await getUser(req.tgUser.id);
-  res.json({ ...rows[0], balances: pub(u) });
+  res.json({ ...rows[0], balances: await pubFull(u) });
 });
 
 // charge for a review/overview from the USD balance
@@ -101,7 +121,7 @@ api.post('/charge/usd', auth, async (req, res) => {
   const cost = kind === 'overview' ? OVERVIEW_USD : REVIEW_USD;
   const ok = await chargeUsd(req.tgUser.id, cost, kind === 'overview' ? 'overview' : 'review');
   const u = await getUser(req.tgUser.id);
-  res.json({ ok, balances: pub(u) });
+  res.json({ ok, balances: await pubFull(u) });
 });
 
 // create a Telegram Stars invoice link (mini app opens it via Telegram.WebApp.openInvoice)
@@ -122,6 +142,15 @@ function pub(u) {
     username: u.username,
     avatar_url: u.avatar_url,
     stars: u.stars,
-    usd_balance: Number(u.usd_balance)
+    usd_balance: Number(u.usd_balance),
+    free_overviews: u.free_overviews ?? 0,
+    free_reviews: u.free_reviews ?? 0
   };
+}
+async function pubFull(u) {
+  const base = pub(u);
+  const stats = await referralStats(u.telegram_id);
+  base.invited = stats.invited;
+  base.ref_link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}?start=${u.telegram_id}` : null;
+  return base;
 }
