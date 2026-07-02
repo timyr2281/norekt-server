@@ -2,7 +2,8 @@ import express from 'express';
 import { verifyInitData } from './initdata.js';
 import {
   upsertUser, getUser, setProfile, chargeUsd,
-  useFreeOverview, useFreeReview, referralStats
+  useFreeOverview, useFreeReview, referralStats,
+  saveAnalysis, listAnalyses
 } from './db.js';
 import { pool } from './db.js';
 import {
@@ -124,6 +125,17 @@ api.post('/charge/usd', auth, async (req, res) => {
   res.json({ ok, balances: await pubFull(u) });
 });
 
+// save a generated analysis (review/overview) so history is real & re-openable
+api.post('/history/add', auth, async (req, res) => {
+  const { kind, coin, level, payload } = req.body || {};
+  const row = await saveAnalysis(req.tgUser.id, kind === 'overview' ? 'overview' : 'review', coin, level, payload);
+  res.json({ id: row.id, created_at: row.created_at });
+});
+api.post('/history/list', auth, async (req, res) => {
+  const rows = await listAnalyses(req.tgUser.id, 30);
+  res.json({ items: rows });
+});
+
 // create a Telegram Stars invoice link (mini app opens it via Telegram.WebApp.openInvoice)
 api.post('/stars/invoice', auth, async (req, res) => {
   const { kind } = req.body || {};
@@ -151,6 +163,7 @@ async function pubFull(u) {
   const base = pub(u);
   const stats = await referralStats(u.telegram_id);
   base.invited = stats.invited;
+  base.invited_paid = stats.paid;
   base.ref_link = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}?start=${u.telegram_id}` : null;
   return base;
 }

@@ -11,9 +11,9 @@ bot.start(async (ctx) => {
   const ref = ctx.startPayload || null;   // inviter's telegram id, if any
   await upsertUser(ctx.from, ref);
   await ctx.reply(
-    'NoRekt — трезвая оценка риска твоей позиции.',
+    'NoRekt — a sober read on your position. Tap below to open.',
     WEBAPP_URL
-      ? { reply_markup: { inline_keyboard: [[{ text: 'Открыть NoRekt', web_app: { url: WEBAPP_URL } }]] } }
+      ? { reply_markup: { inline_keyboard: [[{ text: 'Open NoRekt', web_app: { url: WEBAPP_URL } }]] } }
       : undefined
   );
 });

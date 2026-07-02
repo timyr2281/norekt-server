@@ -19,8 +19,8 @@ export async function initDb() {
       avatar_url   TEXT,
       stars        INTEGER     NOT NULL DEFAULT 0,
       usd_balance  NUMERIC(18,6) NOT NULL DEFAULT 0,
-      free_overviews INTEGER   NOT NULL DEFAULT 2,   -- new user gets 2 free coin overviews
-      free_reviews   INTEGER   NOT NULL DEFAULT 0,   -- earned via referrals who paid
+      free_overviews INTEGER   NOT NULL DEFAULT 1,   -- new user: 1 free coin overview
+      free_reviews   INTEGER   NOT NULL DEFAULT 1,   -- new user: 1 free trade review
       referred_by    BIGINT,                          -- who invited this user (set once)
       has_paid       BOOLEAN   NOT NULL DEFAULT FALSE, -- did this user ever pay (for referral reward)
       created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -62,9 +62,21 @@ export async function initDb() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    -- saved analyses so history is real and re-openable
+    CREATE TABLE IF NOT EXISTS analyses (
+      id          BIGSERIAL PRIMARY KEY,
+      telegram_id BIGINT NOT NULL,
+      kind        TEXT   NOT NULL,  -- review | overview
+      coin        TEXT,
+      level       TEXT,             -- High/Mid/Low for reviews
+      payload     JSONB NOT NULL,   -- everything needed to re-render
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS analyses_user_idx ON analyses(telegram_id, created_at DESC);
+
     -- migrations for a DB created before these columns existed
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_overviews INTEGER NOT NULL DEFAULT 2;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_reviews   INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_overviews INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS free_reviews   INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by    BIGINT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS has_paid       BOOLEAN NOT NULL DEFAULT FALSE;
   `);
@@ -150,8 +162,27 @@ export async function rewardOnFirstPayment(id) {
 }
 
 export async function referralStats(id) {
-  const { rows } = await pool.query('SELECT count(*)::int AS n FROM referrals WHERE inviter_id=$1', [id]);
-  return { invited: rows[0]?.n || 0 };
+  const { rows } = await pool.query(
+    `SELECT
+       count(*)::int AS invited,
+       count(*) FILTER (WHERE r.paid_rewarded)::int AS paid
+     FROM referrals r WHERE r.inviter_id=$1`, [id]);
+  return { invited: rows[0]?.invited || 0, paid: rows[0]?.paid || 0 };
+}
+
+export async function saveAnalysis(id, kind, coin, level, payload) {
+  const { rows } = await pool.query(
+    `INSERT INTO analyses (telegram_id, kind, coin, level, payload)
+     VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
+    [id, kind, coin || null, level || null, JSON.stringify(payload || {})]
+  );
+  return rows[0];
+}
+export async function listAnalyses(id, limit = 30) {
+  const { rows } = await pool.query(
+    `SELECT id, kind, coin, level, payload, created_at FROM analyses
+       WHERE telegram_id=$1 ORDER BY created_at DESC LIMIT $2`, [id, limit]);
+  return rows;
 }
 
 export async function getUser(id) {
