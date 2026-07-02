@@ -1,0 +1,127 @@
+import express from 'express';
+import { verifyInitData } from './initdata.js';
+import {
+  upsertUser, getUser, setProfile, chargeUsd, chargeStars
+} from './db.js';
+import { pool } from './db.js';
+import {
+  NETWORKS, COIN_NETWORKS, DEPOSIT_TTL_MIN,
+  REVIEW_USD, OVERVIEW_USD
+} from './config.js';
+import { createStarsInvoice } from './bot.js';
+
+export const api = express.Router();
+api.use(express.json());
+
+// auth middleware: every call must send Telegram initData; we verify it and trust the user.
+async function auth(req, res, next) {
+  const initData = req.headers['x-init-data'] || req.body?.initData;
+  const user = verifyInitData(initData);
+  if (!user) return res.status(401).json({ error: 'bad_init_data' });
+  req.tgUser = user;
+  req.dbUser = await upsertUser(user);
+  next();
+}
+
+// current profile + balances
+api.post('/me', auth, async (req, res) => {
+  res.json(pub(req.dbUser));
+});
+
+// edit name / avatar
+api.post('/profile', auth, async (req, res) => {
+  const { name, avatar_url } = req.body || {};
+  const u = await setProfile(req.tgUser.id, { name, avatar_url });
+  res.json(pub(u));
+});
+
+// list coins & networks the app should show (kept server-side so it can't drift)
+api.post('/methods', auth, (req, res) => {
+  const out = {};
+  for (const [coin, nets] of Object.entries(COIN_NETWORKS)) {
+    out[coin] = nets.map(n => ({ key: n, label: NETWORKS[n].label, address: NETWORKS[n].address }));
+  }
+  res.json({ coins: out });
+});
+
+// create a deposit request -> returns the EXACT amount (with unique tag) to send
+api.post('/deposit/create', auth, async (req, res) => {
+  const { coin, network, amount } = req.body || {};
+  const base = Math.floor(Number(amount) * 1000) / 1000;
+  if (!COIN_NETWORKS[coin] || !COIN_NETWORKS[coin].includes(network) || !(base > 0))
+    return res.status(400).json({ error: 'bad_params' });
+
+  const address = NETWORKS[network].address;
+  const expiresExpr = `now() + interval '${DEPOSIT_TTL_MIN} minutes'`;
+
+  // pick a free unique amount: base + n/1000, n in 1..999, not currently pending on same net/coin
+  let expected = null;
+  const start = 1 + Math.floor(Math.random() * 999);
+  for (let i = 0; i < 999; i++) {
+    const n = ((start + i - 1) % 999) + 1;
+    const candidate = +(base + n / 1000).toFixed(3);
+    const taken = await pool.query(
+      `SELECT 1 FROM deposits WHERE network=$1 AND coin=$2 AND status='pending'
+         AND expires_at > now() AND expected_amount=$3 LIMIT 1`,
+      [network, coin, candidate]
+    );
+    if (!taken.rowCount) { expected = candidate; break; }
+  }
+  if (expected === null) return res.status(503).json({ error: 'no_free_tag_try_later' });
+
+  const { rows } = await pool.query(
+    `INSERT INTO deposits (telegram_id, coin, network, address, base_amount, expected_amount, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6, ${expiresExpr}) RETURNING id, expires_at`,
+    [req.tgUser.id, coin, network, address, base, expected]
+  );
+
+  res.json({
+    id: rows[0].id,
+    coin, network, address,
+    expected_amount: expected,
+    expires_at: rows[0].expires_at
+  });
+});
+
+// poll a deposit's status (mini app can check "credited yet?")
+api.post('/deposit/status', auth, async (req, res) => {
+  const { id } = req.body || {};
+  const { rows } = await pool.query(
+    'SELECT id,status,expected_amount,coin,network FROM deposits WHERE id=$1 AND telegram_id=$2',
+    [id, req.tgUser.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not_found' });
+  const u = await getUser(req.tgUser.id);
+  res.json({ ...rows[0], balances: pub(u) });
+});
+
+// charge for a review/overview from the USD balance
+api.post('/charge/usd', auth, async (req, res) => {
+  const { kind } = req.body || {};
+  const cost = kind === 'overview' ? OVERVIEW_USD : REVIEW_USD;
+  const ok = await chargeUsd(req.tgUser.id, cost, kind === 'overview' ? 'overview' : 'review');
+  const u = await getUser(req.tgUser.id);
+  res.json({ ok, balances: pub(u) });
+});
+
+// create a Telegram Stars invoice link (mini app opens it via Telegram.WebApp.openInvoice)
+api.post('/stars/invoice', auth, async (req, res) => {
+  const { kind } = req.body || {};
+  try {
+    const { link, stars } = await createStarsInvoice(kind === 'overview' ? 'overview' : 'review', req.tgUser.id);
+    res.json({ link, stars });
+  } catch (e) {
+    res.status(500).json({ error: 'invoice_failed', detail: e.message });
+  }
+});
+
+function pub(u) {
+  return {
+    telegram_id: u.telegram_id,
+    name: u.name,
+    username: u.username,
+    avatar_url: u.avatar_url,
+    stars: u.stars,
+    usd_balance: Number(u.usd_balance)
+  };
+}
